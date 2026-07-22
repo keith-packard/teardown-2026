@@ -1,0 +1,273 @@
+Teardown 2026 embedded toolchains talk
+
+Components:
+	Compiler (GCC or Clang)
+	Linker (GNU linker or lld)
+	C library (picolibc)
+	C++ library (libstdc++ or libc++)
+	Emulator (qemu or FVP)
+	SWD/Jtag utility (openocd)
+	Debugger (gdb or lldb)
+
+Toolchains:
+	Debian (or Ubuntu)
+	Zephyr (GCC and LLVM)
+	Arm GNU Embedded
+	Arm Toolchain for Embedded (LLVM)
+	crosstool-ng
+
+	Zephyr and Debian include everything you need; the others only
+	provide the compiler, linker and C library.
+
+Debian:
+	$ sudo apt install picolibc-arm-none-eabi openocd qemu-system-arm
+
+	Ideal if you're running Debian.
+	Tracks GNU Arm Embedded sources.
+	Stable version requires --specs=picolibc.specs
+	"Batteries included"
+	Supported by your humble presenter.
+
+Zephyr:
+
+	https://github.com/zephyrproject-rtos/sdk-ng
+
+	Great for everything other than Debian.
+	GCC version 14, which is not the latest.
+	Both GCC and Clang available.
+	"Batteries included"
+	Supported by the Zephyr SDK team, including the presenter.
+
+	Not just for Zephyr; these toolchains are usable for any
+	embedded development. Highly recommended.
+
+Arm GNU Toolchain
+
+	https://developer.arm.com/tools-and-software/gnu-toolchain
+
+	Directly supported by ARM
+	Picolibc extension available
+	Requires --specs=picolibc.specs
+	Doesn't provide TLS support, which can be a problem
+	Does not include qemu or openocd
+
+Arm Toolchain for Embedded:
+
+	https://github.com/arm/arm-toolchain
+
+	Directly supported by ARM
+	Native picolibc support (and actively supported)
+	Does not include qemu, openocd or a debugger (gdb/lldb)
+
+Crosstool-ng:
+
+	https://crosstool-ng.github.io/
+
+	Build a toolchain from source
+	Native picolibc support, but 1.8.10 instead of 1.8.11
+	Use the arm-picolibc-eabi sample
+	Picolibc support maintained by the presenter.
+	Takes about an hour to build on my laptop.
+	Does not include qemu, openocd or a debugger
+
+Adding the remaining bits:
+
+	For everything other than Zephyr and Debian, you'll need more stuff
+
+	qemu: https://www.qemu.org/download/
+	openocd: https://github.com/openocd-org/openocd/releases (mingw32 only)
+	gdb: https://packages.msys2.org/packages/mingw-w64-x86_64-gdb-multiarch
+	fvp: https://developer.arm.com/tools-and-software/fixed-virtual-platforms
+
+Using GCC toolchains:
+
+	Some require --specs=picolibc.specs
+	Use --crt0=semihost and --oslib=semihost
+	Use -mcpu=<cpu> to configure the compiler for the target CPU
+
+Using Clang toolchains:
+
+	Picolibc support is built-in
+	Use -lcrt0-semihost and -lsemihost
+	Use --target=<isa>-none-eabi and -mfloat-abi={hard,soft} to
+	configure the compiler for the target CPU
+
+C++:
+	Yes.
+	Including libstdc++/libc++.
+	Zephyr and Debian toolchains provide two versions
+		Build with -O2 for exception support
+		Build with -Os to eliminate that
+
+Toolchain setup steps:
+
+	Download and install
+	Compile and link simple hello-world for qemu with basic
+	cortex-m3 target
+	Test with qemu
+	Adjust for target board
+	Compile and link for target
+	Test on target
+
+Linker Scripts:
+
+	The darkest of the toolchain arts.
+
+	Defines where each chunk of the program goes.
+		Read-only bits to flash
+		Read-write bits to RAM
+
+	Declares symbols needed by the C library.
+		How to initialize memory
+		Where to place the stack and heap
+
+	Picolibc's sample scripts are a good starting point
+		Assumes one chunk of flash and another of ram.
+
+Linker Script Components
+
+	MEMORY block describes memory regions for target processor.
+		Attributes (read/write/execute).
+		Address
+
+	PHDRS block describes ELF attributes for chunks of memory
+		Each section gets an PHDRS name *and* a MEMORY name
+
+	SECTIONS block maps symbols to memory
+		Each section groups symbols with matching MEMORY and PHDRS attribute
+		Defines symbols needed by C library
+		Debugging and other information sections don't actually end up on the device.
+
+	Review the data sheet to get the MEMORY values.
+
+	Read the C library documentation to learn what extra symbols
+	are needed.
+
+Demo
+
+	Adafruit Metro M4 Express
+		Atmel ATSAMD51 processor (Cortex M4)
+		Using Segger J-Link for SWD
+
+	Raspberry Pi Pico
+		RP2040 processor (Dual Cortex M0)
+		CMSIS-DAP for SWD
+
+Source code:
+
+	#include <stdio.h>
+	#include <stdlib.h>
+
+	int
+	main(void)
+	{
+	    printf("hello, world\n");
+	    exit(0);
+	}
+
+Linker script for Metro M4 using GCC:
+
+	__flash =      0x00000000;
+	__flash_size = 0x00100000;
+	__ram =        0x20000000;
+	__ram_size   = 0x00010000;
+	__stack_size = 1k;
+
+	INCLUDE picolibc.ld
+
+Linker script for Metro M4 using Clang:
+
+	Clang provides per-CPU linker scripts, and the one for
+	cortex-m4 has separate boot and flash areas, so we
+	have to avoid the boot area here:
+
+	__flash =      0x00001000;
+	__flash_size = 0x00100000;
+	__ram =        0x20000000;
+	__ram_size   = 0x00010000;
+	__stack_size = 1k;
+
+	INCLUDE picolibc.ld
+
+Linker script for Raspberry Pi Pico:
+
+	__flash =      0x10000000;
+	__flash_size = 0x00200000;
+	__ram =        0x20000000;
+	__ram_size   = 0x00040000;
+	__stack_size = 1k;
+
+	INCLUDE picolibc.ld
+
+Building:
+
+	Metro M4:
+		arm-none-eabi-gcc \
+			-mcpu=cortex-m4 \
+			-Tmetro-m4.ld \
+			--oslib=semihost \
+			hello-world.c
+		clang \
+			--target=thumbv7em-none-eabi \
+			-mfloat-abi=hard \
+			-Tmetro-m4.ld \
+			-lsemihost \
+			hello-world.c
+
+	Raspberry Pi Pico:
+		arm-none-eabi-gcc -mcpu=cortex-m0
+			-Trp2040.ld --oslib=semihost hello-world.c
+		clang --target=thumbv6m-none-eabi -mfloat-abi=soft
+			-Trp2040.ld -lcrt0-semihost -lsemihost hello-world.c
+
+Testing with qemu:
+
+	The Metro M4 memory map matches what qemu expects, so we can
+	run that directly:
+
+		qemu-system-arm \
+			-chardev stdio,mux=on,id=stdio0 \
+			-semihosting-config enable=on,chardev=stdio0 \
+			-monitor none \
+			-serial none \
+			-nographic \
+			-machine mps2-an386,accel=tcg \
+			-cpu cortex-m4 \
+			-device loader,file=./hello-world-metro-m4.elf,cpu-num=0
+
+Running on Metro-M4:
+
+	Launch openocd in one window:
+
+		$ openocd \
+		     -f interface/jlink.cfg \
+		     -c 'transport select swd' \
+		     -c "set CPUTAPID 0x2ba01477" \
+		     -f target/atsame5x.cfg \
+		     -c 'init' \
+		     -c 'arm semihosting enable'
+
+	Launch gdb in another window:
+
+		$ gdb-multiarch hello-world-metro-m4.elf
+		(gdb) tar rem :3333
+		(gdb) load
+		(gdb) c
+
+Running on RP2040:
+
+	Launch openocd in one window:
+
+		$ openocd \
+			-f interface/cmsis-dap.cfg \
+			-f target/rp2040.cfg \
+			-c 'adapter speed 5000' \
+			-c 'init' \
+			-c 'arm semihosting enable'
+
+	Launch gdb in another window:
+
+		$ gdb-multiarch hello-world-rp2040.elf
+		(gdb) tar rem :3333
+		(gdb) load
+		(gdb) c
